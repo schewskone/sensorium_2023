@@ -1,4 +1,5 @@
 import os
+import time
 from functools import partial
 
 import numpy as np
@@ -49,6 +50,7 @@ def standard_trainer(
     checkpoint_save_path="local/",
     chpt_save_step=15,
     deeplake_ds=False,
+    max_training_hours=44,
     **kwargs,
 ):
     """
@@ -81,6 +83,14 @@ def standard_trainer(
     Returns:
 
     """
+    dataset_name = next(iter(dataloaders['train']))
+    start_time = time.time()
+    max_training_seconds = max_training_hours * 3600
+    time_limit_reached = False
+
+    def check_time_limit():
+        elapsed_time = time.time() - start_time
+        return elapsed_time >= max_training_seconds
 
     def full_objective(model, dataloader, data_key, *args, **kwargs):
         loss_scale = (
@@ -190,6 +200,13 @@ def standard_trainer(
         scheduler=scheduler,
         lr_decay_steps=lr_decay_steps,
     ):
+        epoch_start_time = time.time()
+
+        if check_time_limit():
+            print("44 Hours surpassed. Stopping training and saving last parameter config")
+            time_limit_reached = True
+            break
+
         # executes callback function if passed in keyword args
         if cb is not None:
             cb()
@@ -204,7 +221,7 @@ def standard_trainer(
             desc="Epoch {}".format(epoch),
         ):
             batch_no_tot += 1
-            batch_args = list(data)
+            batch_args = list(data.values())
 
             batch_kwargs = data._asdict() if not isinstance(data, dict) else data
 
@@ -225,14 +242,24 @@ def standard_trainer(
                 #                 optimizer.zero_grad(set_to_none=False)
                 optimizer.zero_grad(set_to_none=True)
 
+            if batch_no % 10 == 0 and check_time_limit():
+                print(f"Time limit reached during batch processing. Stopping training...")
+                time_limit_reached = True
+                break
+        
+        if time_limit_reached:
+            break
+
         model.eval()
         if save_checkpoints:
             if epoch % chpt_save_step == 0:
                 torch.save(
-                    model.state_dict(), f"{checkpoint_save_path}epoch_{epoch}.pth"
+                    model.state_dict(), f"{checkpoint_save_path}{dataset_name}_epoch_{epoch}.pth"
                 )
 
         ## after - epoch-analysis
+        
+        epoch_duration = time.time() - epoch_start_time
 
         validation_correlation = get_correlations(
             model,
@@ -253,7 +280,7 @@ def standard_trainer(
         print(
             f"Epoch {epoch}, Batch {batch_no}, Train loss {loss}, Validation loss {val_loss}"
         )
-        print(f"EPOCH={epoch}  validation_correlation={validation_correlation}")
+        print(f"EPOCH={epoch}  validation_correlation={validation_correlation}  epoch_duration={epoch_duration}")
 
         if use_wandb:
             wandb_dict = {
@@ -263,6 +290,7 @@ def standard_trainer(
                 "validation_correlation": validation_correlation,
                 "Epoch validation loss": val_loss,
                 "Epoch": epoch,
+                "Epoch_duration": epoch_duration,
             }
             wandb.log(wandb_dict)
         model.train()
@@ -270,7 +298,7 @@ def standard_trainer(
     ##### Model evaluation ####################################################################################################
     model.eval()
     if save_checkpoints:
-        torch.save(model.state_dict(), f"{checkpoint_save_path}final.pth")
+        torch.save(model.state_dict(), f"{checkpoint_save_path}{dataset_name}final.pth")
 
     # Compute avg validation and test correlation
     validation_correlation = get_correlations(

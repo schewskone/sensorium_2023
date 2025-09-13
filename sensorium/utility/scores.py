@@ -7,7 +7,7 @@ from neuralpredictors.training import device_state
 
 
 def model_predictions(
-    model, dataloader, data_key, device="cpu", skip=50, deeplake_ds=False
+    model, dataloader, data_key, device="cpu", skip=20, deeplake_ds=False
 ):
     """
     computes model predictions for a given dataloader and a model
